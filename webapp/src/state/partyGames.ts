@@ -2,7 +2,7 @@ import { computed, reactive, watch } from 'vue';
 import { GAME_CATALOG, gameInfo } from '../gameCatalog';
 import { hasJeeWebBridge, loadPixelMug } from '../template/bubbleClient';
 import { openMpsApp } from '../template/mpsLaunch';
-import { useBleSession } from '../template/bleSession';
+import { useBleSession, type BleDataEvent } from '../template/bleSession';
 import type { AppStatus, DeviceInfo, GameId, HistoryItem } from '../types';
 
 type LaunchPhase = 'idle' | 'requesting' | 'preparing' | 'switching' | 'ready' | 'failed';
@@ -12,6 +12,7 @@ const DEFAULT_WHEEL_OPTIONS = ['Pizza', 'Movie', 'Karaoke', 'Coffee'];
 const STORAGE_KEY = 'mps-party-games-state-v1';
 const MAX_WHEEL_OPTIONS = 10;
 const MAX_WHEEL_TEXT = 8;
+const MAX_HISTORY = 5;
 
 const saved = loadSavedState();
 const state = reactive({
@@ -125,6 +126,7 @@ export function usePartyGames() {
       await ble.ensureConnected(target);
       state.status = 'connected';
       state.message = 'BLE connected.';
+      await requestHistory();
     } catch (error) {
       state.status = 'error';
       state.message = errorMessage(error);
@@ -155,11 +157,35 @@ export function usePartyGames() {
       state.status = 'connected';
       state.businessStatus = 'connected';
       state.businessMessage = `${gameInfo(game).name} is on PixelMug.`;
-      addHistory(game);
     } catch (error) {
       state.status = 'error';
       state.businessStatus = 'error';
       state.businessMessage = errorMessage(error);
+    }
+  }
+
+  async function requestHistory() {
+    if (!state.device || !getBle().isReady.value) return;
+    try {
+      await getBle().send(state.device, {
+        method: 'mpyPartyGamesGetHistory',
+        id: `history_${Date.now()}`,
+      });
+    } catch {
+      // History sync is best-effort and should not block the game controls.
+    }
+  }
+
+  async function clearHistory() {
+    state.history = [];
+    if (!state.device || !getBle().isReady.value) return;
+    try {
+      await getBle().send(state.device, {
+        method: 'mpyPartyGamesClearHistory',
+        id: `clear_${Date.now()}`,
+      });
+    } catch {
+      // Keep the UI cleared even if the device is currently unavailable.
     }
   }
 
@@ -169,6 +195,9 @@ export function usePartyGames() {
 
   function setTab(tab: TabId) {
     state.activeTab = tab;
+    if (tab === 'history') {
+      requestHistory();
+    }
   }
 
   function addWheelOption() {
@@ -189,7 +218,13 @@ export function usePartyGames() {
 
   function bindBleState() {
     refreshDevice();
-    return getBle().bindState();
+    const ble = getBle();
+    const cleanupState = ble.bindState();
+    const cleanupData = ble.bindData(handleBleData);
+    return () => {
+      cleanupState();
+      cleanupData();
+    };
   }
 
   return {
@@ -206,25 +241,62 @@ export function usePartyGames() {
     maxWheelText: MAX_WHEEL_TEXT,
     addWheelOption,
     bindBleState,
+    clearHistory,
     connectDevice,
     normalizeWheelOptions,
     openOnDevice,
     refreshDevice,
     removeWheelOption,
+    requestHistory,
     selectGame,
     setTab,
     showGame,
   };
 }
 
-function addHistory(game: GameId) {
-  const item: HistoryItem = {
-    id: `${Date.now()}_${game}`,
-    game,
-    label: gameInfo(game).name,
-    time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+function handleBleData(event: BleDataEvent) {
+  const message = event.message;
+  if (!message || message.event !== 'partyGamesHistory') return;
+  mergeHistory(message.records);
+}
+
+function mergeHistory(records: unknown) {
+  if (!Array.isArray(records)) return;
+  const existing = new Map<GameId, HistoryItem>();
+  for (const item of state.history) {
+    existing.set(item.game, item);
+  }
+
+  for (const raw of records) {
+    const item = normalizeHistoryItem(raw);
+    if (item) existing.set(item.game, item);
+  }
+
+  state.history = Array.from(existing.values())
+    .sort((a, b) => historyOrderValue(b) - historyOrderValue(a))
+    .slice(0, MAX_HISTORY);
+}
+
+function normalizeHistoryItem(raw: unknown): HistoryItem | null {
+  const item = raw as Partial<HistoryItem> | null;
+  if (!item || typeof item !== 'object') return null;
+  if (!item.id || !isGame(item.game)) return null;
+  const result = String(item.result || '').trim();
+  if (!result) return null;
+  return {
+    id: String(item.id),
+    game: item.game,
+    label: String(item.label || gameInfo(item.game).name),
+    result,
+    time: String(item.time || ''),
+    tick: Number.isFinite(Number(item.tick)) ? Number(item.tick) : undefined,
   };
-  state.history = [item, ...state.history].slice(0, 10);
+}
+
+function historyOrderValue(item: HistoryItem) {
+  if (typeof item.tick === 'number') return item.tick;
+  const numeric = Number(String(item.id).split('_')[0]);
+  return Number.isFinite(numeric) ? numeric : 0;
 }
 
 function markLaunchReady() {
@@ -259,11 +331,24 @@ function loadSavedState() {
     return {
       selectedGame: isGame(raw.selectedGame) ? raw.selectedGame : fallback.selectedGame,
       wheelOptions: sanitizeOptions(raw.wheelOptions || fallback.wheelOptions),
-      history: Array.isArray(raw.history) ? raw.history.slice(0, 10) : fallback.history,
+      history: Array.isArray(raw.history) ? dedupeHistoryByGame(raw.history.map(normalizeHistoryItem).filter((item): item is HistoryItem => Boolean(item))) : fallback.history,
     };
   } catch {
     return fallback;
   }
+}
+
+function dedupeHistoryByGame(items: HistoryItem[]) {
+  const byGame = new Map<GameId, HistoryItem>();
+  for (const item of items) {
+    const current = byGame.get(item.game);
+    if (!current || historyOrderValue(item) >= historyOrderValue(current)) {
+      byGame.set(item.game, item);
+    }
+  }
+  return Array.from(byGame.values())
+    .sort((a, b) => historyOrderValue(b) - historyOrderValue(a))
+    .slice(0, MAX_HISTORY);
 }
 
 function sanitizeOptions(options: unknown) {

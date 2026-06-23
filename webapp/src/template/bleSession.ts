@@ -3,6 +3,19 @@ import type { DeviceInfo } from '../types';
 import { getWebApp, hasJeeWebBridge } from './bubbleClient';
 
 type BlePayload = Record<string, unknown>;
+export type BleDataEvent = {
+  raw?: unknown;
+  hex?: string;
+  text?: string;
+  message?: Record<string, unknown>;
+  slotId?: string;
+  receivedAt?: number;
+};
+
+type BleDataSource = {
+  onData(handler: (event: BleDataEvent) => void): void;
+  off(event: 'data', handler: (event: BleDataEvent) => void): void;
+};
 
 const READY_STATE = 'ready';
 const READY_STATES = new Set(['ready', 'connected']);
@@ -99,6 +112,15 @@ export function useBleSession() {
     }
   }
 
+  function bindData(handler: (event: BleDataEvent) => void) {
+    if (!hasJeeWebBridge()) return () => undefined;
+    const ble = getWebApp().ble! as unknown as BleDataSource;
+    ble.onData(handler);
+    return () => {
+      ble.off('data', handler);
+    };
+  }
+
   function bindState() {
     if (!hasJeeWebBridge()) return () => undefined;
     const listener = (event: { state?: string; data?: string }) => {
@@ -131,6 +153,7 @@ export function useBleSession() {
     isReady,
     isConnecting,
     isUnavailable,
+    bindData,
     bindState,
     ensureConnected,
     reconnect,

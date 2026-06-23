@@ -20,7 +20,7 @@ FPS = 30
 APP_NAME = "PartyGames"
 MAX_WHEEL_OPTIONS = 10
 MAX_WHEEL_TEXT = 8
-MAX_HISTORY = 30
+MAX_HISTORY = 5
 HISTORY_PATH = "party_history.jsonl"
 
 GAME_COIN = "COIN"
@@ -111,6 +111,12 @@ class PartyGamesRouter:
                 self.ble.reply(request_id, True, conn=conn)
                 self._send_history(conn=conn)
                 return
+            if method == "mpyPartyGamesClearHistory":
+                self.history = []
+                self._save_history()
+                self.ble.reply(request_id, True, conn=conn)
+                self._send_history(conn=conn)
+                return
             if method != "mpyPartyGamesSelect":
                 return
 
@@ -190,13 +196,17 @@ class PartyGamesRouter:
             "game": game_id,
             "label": label,
             "result": str(result),
+            "time": self._time_text(),
             "tick": tick,
         }
 
     def _append_record(self, record):
-        self.history.append(record)
-        if len(self.history) > MAX_HISTORY:
-            self.history = self.history[-MAX_HISTORY:]
+        next_history = []
+        for item in self.history:
+            if item.get("game") != record.get("game"):
+                next_history.append(item)
+        next_history.append(record)
+        self.history = self._sort_history(next_history)[-MAX_HISTORY:]
         self._save_history()
 
     def _load_history(self):
@@ -215,14 +225,17 @@ class PartyGamesRouter:
                         pass
         except Exception:
             pass
-        if len(records) > MAX_HISTORY:
-            records = records[-MAX_HISTORY:]
-        return records
+        by_game = {}
+        for record in records:
+            game = record.get("game")
+            if game:
+                by_game[game] = record
+        return self._sort_history(list(by_game.values()))[-MAX_HISTORY:]
 
     def _save_history(self):
         try:
             with open(HISTORY_PATH, "w") as fp:
-                for record in self.history[-MAX_HISTORY:]:
+                for record in self._sort_history(self.history)[-MAX_HISTORY:]:
                     fp.write(json.dumps(record))
                     fp.write("\n")
         except Exception as exc:
@@ -231,13 +244,23 @@ class PartyGamesRouter:
     def _send_history(self, conn=None):
         if not self.ble.connected and conn is None:
             return
-        self.ble.send({"event": "partyGamesHistory", "records": self.history[-MAX_HISTORY:]}, conn=conn)
+        self.ble.send({"event": "partyGamesHistory", "records": self._sort_history(self.history)[-MAX_HISTORY:]}, conn=conn)
 
     def _sync_history_on_connect(self):
         connected = self.ble.connected
         if connected and not self.last_connected:
             self._send_history()
         self.last_connected = connected
+
+    def _sort_history(self, records):
+        return sorted(records, key=lambda item: item.get("tick", 0))
+
+    def _time_text(self):
+        try:
+            now = time.localtime()
+            return "%02d:%02d:%02d" % (now[3], now[4], now[5])
+        except Exception:
+            return ""
 
     def _normalize_game(self, value):
         key = str(value or "").strip().upper()

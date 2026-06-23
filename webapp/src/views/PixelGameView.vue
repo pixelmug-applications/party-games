@@ -42,6 +42,10 @@ function showSelected() {
 function iconForGame(game: GameId) {
   return gameIcons[gameInfo(game).iconKey];
 }
+
+function historyTime(time: string) {
+  return time || '--:--:--';
+}
 </script>
 
 <template>
@@ -79,25 +83,25 @@ function iconForGame(game: GameId) {
       </section>
     </section>
 
-    <section v-else-if="store.state.activeTab === 'history'" class="tab-page history-page">
-      <header class="page-header">
-        <p>History</p>
-        <h1>Recent Pushes</h1>
+    <section v-else-if="store.state.activeTab === 'history'" class="tab-page history-page compact-page">
+      <header class="history-header">
+        <span>Recent Decisions</span>
+        <button type="button" :disabled="!store.state.history.length" @click="store.clearHistory">Clear all</button>
       </header>
 
-      <div v-if="store.state.history.length" class="history-list">
-        <article v-for="item in store.state.history" :key="item.id" class="history-row">
-          <span class="history-icon" :style="{ color: gameInfo(item.game).accent }" aria-hidden="true">
-            <component :is="iconForGame(item.game)" :size="20" :stroke-width="2.4" />
+      <div v-if="store.state.history.length" class="decision-list">
+        <article v-for="item in store.state.history" :key="item.id" class="decision-row">
+          <span class="decision-icon" :style="{ backgroundColor: gameInfo(item.game).accent }" aria-hidden="true">
+            <component :is="iconForGame(item.game)" :size="22" :stroke-width="2.4" />
           </span>
-          <div>
+          <div class="decision-main">
             <strong>{{ item.label }}</strong>
-            <p>{{ item.time }}</p>
+            <p>{{ historyTime(item.time) }}</p>
           </div>
-          <button type="button" @click="store.showGame(item.game)">Show</button>
+          <strong class="decision-result">{{ item.result }}</strong>
         </article>
       </div>
-      <p v-else class="empty-note">No games have been pushed yet.</p>
+      <p v-else class="empty-note">No decisions yet.</p>
     </section>
 
     <section v-else class="tab-page settings-page">
@@ -128,7 +132,7 @@ function iconForGame(game: GameId) {
         </div>
       </div>
     </section>
-    <button class="show-wide" :disabled="store.busy.value" type="button" @click="showSelected">
+    <button v-if="store.state.activeTab !== 'history'" class="show-wide" :disabled="store.busy.value" type="button" @click="showSelected">
       Show {{ store.selectedGameInfo.value.name }}
     </button>
 

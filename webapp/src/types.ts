@@ -24,5 +24,7 @@ export type HistoryItem = {
   id: string;
   game: GameId;
   label: string;
+  result: string;
   time: string;
+  tick?: number;
 };
