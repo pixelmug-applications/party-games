@@ -126,6 +126,8 @@ class RussianRouletteApp:
             self._tick_spin()
         elif self.state == STATE_STOP:
             self._tick_stop()
+        elif self.state == STATE_ROUND:
+            self._tick_round()
         elif self.state == STATE_SHOT:
             self._tick_shot()
 
@@ -206,6 +208,13 @@ class RussianRouletteApp:
 
         if self.state_frame >= self.spin_fast_frames + SPIN_SLOW_FRAMES:
             self._set_state(STATE_STOP)
+
+    def _tick_round(self):
+        if self.round_no < CHAMBERS:
+            return
+        self.state_frame += 1
+        if self.state_frame >= STOP_HOLD_FRAMES:
+            self._start_trigger()
 
     def _tick_stop(self):
         self.state_frame += 1

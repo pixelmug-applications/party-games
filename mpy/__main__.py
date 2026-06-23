@@ -68,6 +68,8 @@ class PartyGamesRouter:
         self.pyxel_ready = False
         self.last_state = None
         self.last_connected = False
+        self.pending_record = None
+        self.next_send_ms = 0
         self.history = self._load_history()
         self.next_record_id = len(self.history) + 1
         self._switch_to(GAME_COIN)
@@ -75,6 +77,7 @@ class PartyGamesRouter:
     def appUpdate(self, rt):
         self.ble.poll()
         self._sync_history_on_connect()
+        self._flush_pending_record()
         if self.pending_game_id is not None:
             game_id = self.pending_game_id
             self.pending_game_id = None
@@ -105,17 +108,14 @@ class PartyGamesRouter:
             request_id = message.get("id")
             if method == "mpyPing":
                 self.ble.reply(request_id, True, conn=conn)
-                self._send_history(conn=conn)
                 return
             if method == "mpyPartyGamesGetHistory":
-                self.ble.reply(request_id, True, conn=conn)
-                self._send_history(conn=conn)
+                self._reply_history(request_id, conn=conn)
                 return
             if method == "mpyPartyGamesClearHistory":
                 self.history = []
                 self._save_history()
-                self.ble.reply(request_id, True, conn=conn)
-                self._send_history(conn=conn)
+                self._reply_history(request_id, conn=conn)
                 return
             if method != "mpyPartyGamesSelect":
                 return
@@ -182,7 +182,7 @@ class PartyGamesRouter:
 
         if record is not None:
             self._append_record(record)
-            self._send_history()
+            self._queue_record(record)
 
     def _make_record(self, game_id, label, result):
         try:
@@ -241,15 +241,34 @@ class PartyGamesRouter:
         except Exception as exc:
             print("[PartyGames] history save failed:", exc)
 
-    def _send_history(self, conn=None):
-        if not self.ble.connected and conn is None:
+    def _reply_history(self, request_id, conn=None):
+        self.ble.send({"id": request_id, "ok": True, "records": self._records_for_send()}, conn=conn)
+
+    def _records_for_send(self):
+        return list(reversed(self._sort_history(self.history)[-MAX_HISTORY:]))
+
+    def _queue_record(self, record):
+        self.pending_record = record
+        self.next_send_ms = 0
+
+    def _flush_pending_record(self):
+        if self.pending_record is None or not self.ble.connected:
             return
-        self.ble.send({"event": "partyGamesHistory", "records": self._sort_history(self.history)[-MAX_HISTORY:]}, conn=conn)
+        now = time.ticks_ms()
+        if self.next_send_ms and time.ticks_diff(now, self.next_send_ms) < 0:
+            return
+        payload = {"event": "partyGamesResult", "record": self.pending_record}
+        if self.ble.send(payload):
+            self.pending_record = None
+        else:
+            self.next_send_ms = time.ticks_add(now, 1000)
 
     def _sync_history_on_connect(self):
         connected = self.ble.connected
-        if connected and not self.last_connected:
-            self._send_history()
+        if connected and not self.last_connected and self.history:
+            latest = self._records_for_send()
+            if latest:
+                self._queue_record(latest[0])
         self.last_connected = connected
 
     def _sort_history(self, records):

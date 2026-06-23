@@ -167,10 +167,11 @@ export function usePartyGames() {
   async function requestHistory() {
     if (!state.device || !getBle().isReady.value) return;
     try {
-      await getBle().send(state.device, {
+      const response = await getBle().send(state.device, {
         method: 'mpyPartyGamesGetHistory',
         id: `history_${Date.now()}`,
       });
+      mergeHistory((response as { result?: { records?: unknown } }).result?.records);
     } catch {
       // History sync is best-effort and should not block the game controls.
     }
@@ -256,8 +257,12 @@ export function usePartyGames() {
 
 function handleBleData(event: BleDataEvent) {
   const message = event.message;
-  if (!message || message.event !== 'partyGamesHistory') return;
-  mergeHistory(message.records);
+  if (!message) return;
+  if (message.event === 'partyGamesHistory') {
+    mergeHistory(message.records);
+  } else if (message.event === 'partyGamesResult') {
+    mergeHistory([message.record]);
+  }
 }
 
 function mergeHistory(records: unknown) {

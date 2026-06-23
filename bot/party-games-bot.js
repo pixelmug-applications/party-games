@@ -13,7 +13,7 @@ const webAppHost = process.env.WEBAPP_HOST || localAddressHint();
 const generatedWebAppUrl = `http://${webAppHost}:${staticPort}/index.html`;
 const mpsLaunchConfig = {
   id: process.env.MPS_ID || "6595342337",
-  version: process.env.MPS_VERSION || "0.0.1",
+  version: process.env.MPS_VERSION || "0.0.2",
 };
 const webAppUrl = withMpsLaunchConfig(process.env.WEBAPP_URL || generatedWebAppUrl);
 const shouldServeStatic = !process.env.WEBAPP_URL;
