@@ -1,6 +1,6 @@
 {
   "name": "party-games",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "A PixelMug party games collection with coin, dice, RPS, roulette, and wheel.",
   "author": "jeejio",
   "category": "Game",
@@ -10,7 +10,7 @@
       "version": ">=1.0.0"
     },
     {
-      "name": "simpletouch",
+      "name": "audio_service",
       "version": ">=1.0.0"
     },
     {

@@ -1,13 +1,12 @@
 import time
 
 import micropyxel as pyxel
-from simpletouch import SimpleTouch
+import mpy_button as touch_events
 
 
 FPS = 30
 SCREEN_W = 32
 SCREEN_H = 16
-TOUCH_PIN = 38
 
 COL_BLACK = 0
 COLKEY = COL_BLACK
@@ -55,11 +54,13 @@ BACK_TO_FRONT = (
 
 
 class FlipCoinApp:
-    def __init__(self):
+    def __init__(self, touch_enabled=True):
         pyxel.init()
         pyxel.images(COIN_BANK).load_from_png(0, 0, COIN_ASSET_PATH, True)
 
-        self.touch = SimpleTouch(pin_no=TOUCH_PIN, active_high=True)
+        self.touch = touch_events if touch_enabled else None
+        if self.touch is not None:
+            self.touch.clear()
         self.rng_state = self._make_seed()
 
         self.frame = 0
@@ -108,14 +109,18 @@ class FlipCoinApp:
             pass
 
     def _update_touch(self):
-        self.touch.update()
+        if self.touch is None:
+            return
         while True:
             ev = self.touch.get()
             if ev is None:
                 break
-            if ev == "click" or ev == "double":
-                if self.state != STATE_FLIPPING:
-                    self.start_flip()
+            self.handle_touch_event(ev)
+
+    def handle_touch_event(self, ev):
+        if ev == "click" or ev == "double":
+            if self.state != STATE_FLIPPING:
+                self.start_flip()
 
     def _update_flip(self):
         self.flip_frame += 1

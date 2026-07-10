@@ -1,13 +1,12 @@
 import time
 
 import micropyxel as pyxel
-from simpletouch import SimpleTouch
+import mpy_button as touch_events
 
 
 FPS = 30
 SCREEN_W = 32
 SCREEN_H = 16
-TOUCH_PIN = 38
 
 COL_BLACK = 0
 COL_WHITE = 7
@@ -47,11 +46,13 @@ DEFAULT_OPTIONS = ("red", "blue", "green", "pink")
 
 
 class SlotWheelApp:
-    def __init__(self):
+    def __init__(self, touch_enabled=True):
         pyxel.init()
         self.rng_state = self._make_seed()
 
-        self.touch = SimpleTouch(pin_no=TOUCH_PIN, active_high=True)
+        self.touch = touch_events if touch_enabled else None
+        if self.touch is not None:
+            self.touch.clear()
 
         self.config = {
             "options": list(DEFAULT_OPTIONS),
@@ -171,14 +172,18 @@ class SlotWheelApp:
             pass
 
     def _update_touch(self):
-        self.touch.update()
+        if self.touch is None:
+            return
         while True:
             ev = self.touch.get()
             if ev is None:
                 break
-            if ev == "click" or ev == "double":
-                if self.state != STATE_SPINNING:
-                    self.start_spin()
+            self.handle_touch_event(ev)
+
+    def handle_touch_event(self, ev):
+        if ev == "click" or ev == "double":
+            if self.state != STATE_SPINNING:
+                self.start_spin()
 
     def _update_spin(self):
         self.spin_frame += 1

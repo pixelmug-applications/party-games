@@ -1,13 +1,12 @@
 import time
 
 import micropyxel as pyxel
-from simpletouch import SimpleTouch
+import mpy_button as touch_events
 
 
 FPS = 30
 SCREEN_W = 32
 SCREEN_H = 16
-TOUCH_PIN = 38
 
 COL_BLACK = 0
 COL_RED = 8
@@ -36,6 +35,13 @@ STATE_ROUND = 2
 STATE_SPIN = 3
 STATE_STOP = 4
 STATE_SHOT = 5
+STATE_MISS = 6
+
+LOAD_SOUND = "load.ogg"
+MISS_SOUND = "miss.ogg"
+FIRE_SOUND = "fire.ogg"
+RR_SOUND_PATHS = (LOAD_SOUND, MISS_SOUND, FIRE_SOUND)
+MISS_HOLD_FRAMES = 45
 
 # (src_x, src_y, width, height, dst_x, dst_y), inclusive sprite bounds converted to size.
 LOAD_FRAMES = (
@@ -62,16 +68,16 @@ SPIN_FRAMES = (
 )
 
 LOAD_FRAME_DELAYS = (
-    FPS // 5,
-    FPS // 5,
-    FPS // 5,
-    FPS // 5,
-    FPS // 2,
-    FPS // 2,
-    FPS // 2,
-    FPS // 5,
-    FPS // 5,
-    FPS // 5,
+    6,
+    6,
+    6,
+    6,
+    19,
+    19,
+    19,
+    6,
+    7,
+    7,
 )
 
 EMPTY_STOPS = (
@@ -98,11 +104,13 @@ SHOT_FRAMES = (
 
 
 class RussianRouletteApp:
-    def __init__(self):
+    def __init__(self, touch_enabled=True):
         pyxel.init()
         pyxel.images(RR_BANK).load_from_png(0, 0, RR_ASSET_PATH, True)
 
-        self.touch = SimpleTouch(pin_no=TOUCH_PIN, active_high=True)
+        self.touch = touch_events if touch_enabled else None
+        if self.touch is not None:
+            self.touch.clear()
         self.rng_state = self._make_seed()
 
         self.frame = 0
@@ -115,6 +123,23 @@ class RussianRouletteApp:
         self.spin_draw_index = 0
         self.stop_sprite = EMPTY_STOPS[0]
         self.round_bg_sprite = LOAD_FRAMES[-1]
+        self.sound = None
+
+    def set_sound(self, sound):
+        self.sound = sound
+        try:
+            self.sound.preload_many(RR_SOUND_PATHS)
+        except Exception as exc:
+            print("[RR] preload sound failed:", exc)
+
+    def _play_sound(self, path):
+        if self.sound is None:
+            return False
+        try:
+            return self.sound.play(path, interrupt=True)
+        except Exception as exc:
+            print("[RR] play sound failed:", path, exc)
+            return False
 
     def appUpdate(self, _rt):
         self.frame += 1
@@ -130,6 +155,8 @@ class RussianRouletteApp:
             self._tick_round()
         elif self.state == STATE_SHOT:
             self._tick_shot()
+        elif self.state == STATE_MISS:
+            self._tick_miss()
 
     def appDraw(self, _rt):
         pyxel.cls(COL_BLACK)
@@ -146,6 +173,8 @@ class RussianRouletteApp:
             self._draw_sprite(self.stop_sprite)
         elif self.state == STATE_SHOT:
             self._draw_shot()
+        elif self.state == STATE_MISS:
+            self._draw_miss()
 
     def appOnExit(self, _rt, reason, exc):
         try:
@@ -154,20 +183,23 @@ class RussianRouletteApp:
             pass
 
     def _update_touch(self):
-        self.touch.update()
+        if self.touch is None:
+            return
         while True:
             ev = self.touch.get()
             if ev is None:
                 break
-            if ev == "double":
-                self._set_state(STATE_ATTRACT)
-                return
-            if ev == "click":
-                if self.state == STATE_ATTRACT:
-                    self._start_game()
-                elif self.state == STATE_ROUND:
-                    self._start_trigger()
+            self.handle_touch_event(ev)
 
+    def handle_touch_event(self, ev):
+        if ev == "double":
+            self._set_state(STATE_ATTRACT)
+            return
+        if ev == "click":
+            if self.state == STATE_ATTRACT:
+                self._start_game()
+            elif self.state == STATE_ROUND:
+                self._start_trigger()
     def _start_game(self):
         self._mix_rng(self.frame)
         self.round_no = 1
@@ -177,6 +209,7 @@ class RussianRouletteApp:
         elif self.shot_round > CHAMBERS:
             self.shot_round = CHAMBERS
         self.round_bg_sprite = LOAD_FRAMES[-1]
+        self._play_sound(LOAD_SOUND)
         self._set_state(STATE_LOAD)
 
     def _start_trigger(self):
@@ -207,6 +240,8 @@ class RussianRouletteApp:
         self.spin_draw_index = self.spin_step % len(SPIN_FRAMES)
 
         if self.state_frame >= self.spin_fast_frames + SPIN_SLOW_FRAMES:
+            if self._is_shot_round():
+                self._play_sound(FIRE_SOUND)
             self._set_state(STATE_STOP)
 
     def _tick_round(self):
@@ -225,10 +260,17 @@ class RussianRouletteApp:
         if self._is_shot_round():
             self._set_state(STATE_SHOT)
         else:
-            self.round_no += 1
-            self._clamp_round()
             self.round_bg_sprite = self.stop_sprite
-            self._set_state(STATE_ROUND)
+            self._play_sound(MISS_SOUND)
+            self._set_state(STATE_MISS)
+
+    def _tick_miss(self):
+        self.state_frame += 1
+        if self.state_frame < MISS_HOLD_FRAMES:
+            return
+        self.round_no += 1
+        self._clamp_round()
+        self._set_state(STATE_ROUND)
 
     def _tick_shot(self):
         self.state_frame += 1
@@ -299,7 +341,11 @@ class RussianRouletteApp:
     def _draw_round(self):
         self._draw_sprite(self.round_bg_sprite)
         self._clamp_round()
-        pyxel.text(0, 0, "R%d" % self.round_no, COL_RED)
+        self._draw_text_center("R%d" % self.round_no, 5, COL_RED)
+
+    def _draw_miss(self):
+        self._draw_sprite(self.round_bg_sprite)
+        self._draw_text_center("miss", 6, COL_RED)
 
     def _draw_shot(self):
         total = self._shot_total_frames()

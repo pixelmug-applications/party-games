@@ -2,8 +2,10 @@ import json
 import time
 
 import micropyxel as pyxel
+import mpy_button as touch_events
 
 from ble_webapp import WebAppBleManager
+from party_sound import PartySound
 import dice_roll
 import flip_coin
 import rps
@@ -30,6 +32,7 @@ GAME_ROULETTE = "ROULETTE"
 GAME_WHEEL = "WHEEL"
 
 DEFAULT_WHEEL_OPTIONS = ("Pizza", "Movie", "Karaoke", "Coffee")
+GAME_ORDER = (GAME_COIN, GAME_DICE, GAME_RPS, GAME_ROULETTE, GAME_WHEEL)
 
 GAME_CLASSES = {
     GAME_COIN: FlipCoinApp,
@@ -61,9 +64,11 @@ RPS_NAMES = {
 class PartyGamesRouter:
     def __init__(self):
         self.ble = WebAppBleManager(APP_NAME, self.handleBleMessage)
+        self.sound = PartySound()
+        self._reset_touch()
         self.current_game = None
         self.current_game_id = None
-        self.pending_game_id = GAME_COIN
+        self.pending_game_id = None
         self.wheel_options = list(DEFAULT_WHEEL_OPTIONS)
         self.pyxel_ready = False
         self.last_state = None
@@ -76,8 +81,10 @@ class PartyGamesRouter:
 
     def appUpdate(self, rt):
         self.ble.poll()
+        self.sound.update()
         self._sync_history_on_connect()
         self._flush_pending_record()
+        self._update_touch()
         if self.pending_game_id is not None:
             game_id = self.pending_game_id
             self.pending_game_id = None
@@ -100,7 +107,41 @@ class PartyGamesRouter:
                 pyxel.destroy()
         except Exception:
             pass
+        try:
+            self.sound.deinit()
+        except Exception:
+            pass
         self.ble.deinit()
+
+    def _update_touch(self):
+        while True:
+            try:
+                ev = touch_events.get()
+            except Exception as exc:
+                print("[PartyGames] touch get failed:", exc)
+                self._reset_touch()
+                return
+            if ev is None:
+                break
+            if ev == "double":
+                self._select_local_game(self._next_game_id())
+                return
+            elif ev == "click" and self.current_game is not None:
+                handler = getattr(self.current_game, "handle_touch_event", None)
+                if handler is not None:
+                    handler("click")
+
+    def _next_game_id(self):
+        try:
+            idx = GAME_ORDER.index(self.current_game_id)
+        except ValueError:
+            idx = -1
+        return GAME_ORDER[(idx + 1) % len(GAME_ORDER)]
+
+    def _select_local_game(self, game_id):
+        self.pending_game_id = game_id
+        if self.ble.connected:
+            self.ble.send({"event": "partyGamesSelected", "game": game_id})
 
     def handleBleMessage(self, conn, message):
         try:
@@ -140,24 +181,35 @@ class PartyGamesRouter:
             return
 
         print("[PartyGames] switch", game_id)
+        self._reset_touch()
         self.current_game = self._build_game(cls)
+        if hasattr(self.current_game, "touch"):
+            self.current_game.touch = None
         self.current_game_id = game_id
         self.last_state = getattr(self.current_game, "state", None)
+        if hasattr(self.current_game, "set_sound"):
+            self.current_game.set_sound(self.sound)
         if game_id == GAME_WHEEL:
             self.current_game.set_options(self.wheel_options)
 
     def _build_game(self, cls):
         if not self.pyxel_ready:
-            app = cls()
+            pyxel.init(start_audio=False)
             self.pyxel_ready = True
-            return app
 
         original_init = pyxel.init
         try:
             pyxel.init = _noop
-            return cls()
+            return cls(False)
         finally:
             pyxel.init = original_init
+
+
+    def _reset_touch(self):
+        try:
+            touch_events.clear()
+        except Exception as exc:
+            print("[PartyGames] touch reset failed:", exc)
 
     def _capture_result(self, prev_state, next_state):
         if prev_state == next_state:
