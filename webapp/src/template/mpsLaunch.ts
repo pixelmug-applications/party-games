@@ -1,4 +1,4 @@
-import type { DeviceInfo } from '../types';
+﻿import type { DeviceInfo } from '../types';
 import {
   getWebApp,
   hasJeeWebBridge,
@@ -15,7 +15,7 @@ export type MpsLaunchConfig = {
 export type MpsLaunchPhase = 'requesting' | 'preparing' | 'switching' | 'ready' | 'failed';
 
 const DEV_MPS_ID = import.meta.env.VITE_MPS_ID || '0000000000';
-const DEV_MPS_VERSION = import.meta.env.VITE_MPS_VERSION || '0.0.1';
+const DEV_MPS_VERSION = import.meta.env.VITE_MPS_VERSION || '1.0.0';
 const MPS_OPEN_TIMEOUT_MS = 45000;
 const READY_EVENTS = new Set(['MPS_IS_RUNNING']);
 const FAILED_EVENTS = new Set(['INSTALL_FAIL', 'RUNNING_FAIL']);
@@ -87,7 +87,14 @@ export async function openMpsApp(
     timeoutMs: options.timeoutMs,
     onPhase: options.onPhase,
   });
-  const result = await installMpsApp(device, config);
+  let result;
+  try {
+    result = await installMpsApp(device, config);
+  } catch (error) {
+    clearPendingLaunch();
+    options.onPhase?.('failed');
+    throw error;
+  }
   const code = mpyExecReturnCode(result);
 
   if (code === 264) {
@@ -255,4 +262,3 @@ function deviceKey(device: DeviceInfo) {
   const raw = device.raw as { slot?: { id?: string | number }; device?: { id?: string | number } } | undefined;
   return String(device.deviceId || raw?.device?.id || device.slotId || raw?.slot?.id || `${device.talId || 'device'}:${device.slot || ''}`);
 }
-

@@ -4,7 +4,7 @@ import time
 import micropyxel as pyxel
 import mpy_button as touch_events
 
-from ble_webapp import WebAppBleManager
+from maopaoBleApp import BleAppService
 from party_sound import PartySound
 import dice_roll
 import flip_coin
@@ -20,6 +20,7 @@ from wheel import SlotWheelApp
 
 FPS = 30
 APP_NAME = "PartyGames"
+APP_VERSION = "1.0.0"
 MAX_WHEEL_OPTIONS = 10
 MAX_WHEEL_TEXT = 8
 MAX_HISTORY = 5
@@ -63,7 +64,8 @@ RPS_NAMES = {
 
 class PartyGamesRouter:
     def __init__(self):
-        self.ble = WebAppBleManager(APP_NAME, self.handleBleMessage)
+        self.ble = BleAppService(APP_NAME, app_version=APP_VERSION, max_message=384)
+        self._register_ble_protocol()
         self.sound = PartySound()
         self._reset_touch()
         self.current_game = None
@@ -141,39 +143,38 @@ class PartyGamesRouter:
     def _select_local_game(self, game_id):
         self.pending_game_id = game_id
         if self.ble.connected:
-            self.ble.send({"event": "partyGamesSelected", "game": game_id})
+            self.ble.publish_state({"game": game_id}, event="partyGamesSelected")
 
-    def handleBleMessage(self, conn, message):
-        try:
-            method = message.get("method")
-            request_id = message.get("id")
-            if method == "mpyPing":
-                self.ble.reply(request_id, True, conn=conn)
-                return
-            if method == "mpyPartyGamesGetHistory":
-                self._reply_history(request_id, conn=conn)
-                return
-            if method == "mpyPartyGamesClearHistory":
-                self.history = []
-                self._save_history()
-                self._reply_history(request_id, conn=conn)
-                return
-            if method != "mpyPartyGamesSelect":
-                return
+    def _register_ble_protocol(self):
+        self.ble.command("mpyPing", self._cmd_ping, priority=1, mutates=False)
+        self.ble.command("mpyPartyGamesSelect", self._cmd_select, priority=0, mutates=True)
+        self.ble.command("mpyPartyGamesGetHistory", self._cmd_get_history, priority=1, mutates=False)
+        self.ble.command("mpyPartyGamesClearHistory", self._cmd_clear_history, priority=1, mutates=True)
+        self.ble.set_state_provider(self._state_payload)
 
-            params = message.get("params") or {}
-            game_id = self._normalize_game(params.get("game"))
-            if game_id is None:
-                self.ble.reply(request_id, False, "Unknown game", conn=conn)
-                return
+    def _cmd_ping(self, params, message=None):
+        return {"ok": True}
 
-            self.wheel_options = self._sanitize_options(params.get("wheelOptions"))
-            self.pending_game_id = game_id
-            self.ble.reply(request_id, True, conn=conn)
-            self.ble.send({"event": "partyGamesSelected", "game": game_id}, conn=conn)
-        except Exception as exc:
-            print("[PartyGames] receive error:", exc)
-            self.ble.reply(None, False, str(exc), conn=conn)
+    def _cmd_select(self, params, message=None):
+        params = params if isinstance(params, dict) else {}
+        game_id = self._normalize_game(params.get("game"))
+        if game_id is None:
+            raise ValueError("Unknown game")
+        self.wheel_options = self._sanitize_options(params.get("wheelOptions"))
+        self.pending_game_id = game_id
+        self.ble.publish_state({"game": game_id}, event="partyGamesSelected")
+        return {"accepted": True, "game": game_id}
+
+    def _cmd_get_history(self, params, message=None):
+        return {"records": self._records_for_send()}
+
+    def _cmd_clear_history(self, params, message=None):
+        self.history = []
+        self._save_history()
+        return {"records": []}
+
+    def _state_payload(self):
+        return {"game": self.current_game_id, "records": self._records_for_send()}
 
     def _switch_to(self, game_id):
         cls = GAME_CLASSES.get(game_id)
@@ -293,9 +294,6 @@ class PartyGamesRouter:
         except Exception as exc:
             print("[PartyGames] history save failed:", exc)
 
-    def _reply_history(self, request_id, conn=None):
-        self.ble.send({"id": request_id, "ok": True, "records": self._records_for_send()}, conn=conn)
-
     def _records_for_send(self):
         return list(reversed(self._sort_history(self.history)[-MAX_HISTORY:]))
 
@@ -309,8 +307,7 @@ class PartyGamesRouter:
         now = time.ticks_ms()
         if self.next_send_ms and time.ticks_diff(now, self.next_send_ms) < 0:
             return
-        payload = {"event": "partyGamesResult", "record": self.pending_record}
-        if self.ble.send(payload):
+        if self.ble.publish_state({"record": self.pending_record}, event="partyGamesResult"):
             self.pending_record = None
         else:
             self.next_send_ms = time.ticks_add(now, 1000)

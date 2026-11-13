@@ -171,7 +171,7 @@ export function usePartyGames() {
         method: 'mpyPartyGamesGetHistory',
         id: `history_${Date.now()}`,
       });
-      mergeHistory((response as { result?: { records?: unknown } }).result?.records);
+      mergeHistory(responsePayload(response)?.records);
     } catch {
       // History sync is best-effort and should not block the game controls.
     }
@@ -256,13 +256,18 @@ export function usePartyGames() {
 }
 
 function handleBleData(event: BleDataEvent) {
-  const message = event.message;
+  const message = event.message as Record<string, unknown> | undefined;
   if (!message) return;
   if (message.event === 'partyGamesHistory') {
     mergeHistory(message.records);
   } else if (message.event === 'partyGamesResult') {
     mergeHistory([message.record]);
   }
+}
+
+function responsePayload(response: unknown) {
+  const item = response as any;
+  return item?.result?.result || item?.result?.message || item?.message || item?.result || response;
 }
 
 function mergeHistory(records: unknown) {
